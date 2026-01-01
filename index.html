@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Turtforest</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            user-select: none;
+        }
+
+        canvas { display: block; }
+
+        #ui {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            pointer-events: none;
+        }
+
+        .stat-bar {
+            width: 200px;
+            height: 18px;
+            background: rgba(0,0,0,0.6);
+            border: 2px solid #444;
+            margin-bottom: 8px;
+            position: relative;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .bar-fill { height: 100%; transition: width 0.3s; }
+        #health-fill { background: linear-gradient(90deg, #ff4d4d, #b30000); width: 100%; }
+        #hunger-fill { background: linear-gradient(90deg, #ffa500, #cc8400); width: 0%; }
+        #energy-fill { background: linear-gradient(90deg, #4da6ff, #0066cc); width: 100%; }
+
+        #inventory {
+            position: absolute;
+            bottom: 25px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            background: rgba(0,0,0,0.8);
+            padding: 12px;
+            border-radius: 15px;
+            border: 1px solid #555;
+            pointer-events: auto;
+        }
+
+        .inv-slot {
+            width: 70px;
+            height: 70px;
+            border: 2px solid #777;
+            margin: 0 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: bold;
+            color: #ffffff; /* Ярко-белый текст */
+            text-shadow: 2px 2px 3px rgba(0,0,0,0.8); /* Тень для читаемости */
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .inv-label { font-size: 10px; color: #aaa; text-transform: uppercase; margin-top: 2px; }
+
+        #crafting-menu {
+            position: absolute;
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0,0,0,0.85);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #555;
+            display: none;
+            pointer-events: auto;
+            min-width: 180px;
+        }
+
+        .craft-item {
+            background: #333;
+            padding: 12px;
+            margin: 8px 0;
+            cursor: pointer;
+            border: 1px solid #555;
+            border-radius: 5px;
+            transition: 0.2s;
+            font-size: 14px;
+        }
+
+        .craft-item:hover { background: #555; border-color: #fff; }
+        
+        #hint {
+            position: absolute;
+            bottom: 120px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            color: #ccc;
+            background: rgba(0,0,0,0.4);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        HP <div class="stat-bar"><div id="health-fill" class="bar-fill"></div></div>
+        Голод <div class="stat-bar"><div id="hunger-fill" class="bar-fill"></div></div>
+        Энергия <div class="stat-bar"><div id="energy-fill" class="bar-fill"></div></div>
+    </div>
+
+    <div id="crafting-menu">
+        <h3 style="margin-top:0; border-bottom: 1px solid #555; padding-bottom: 10px;">Крафт (E)</h3>
+        <div class="craft-item" onclick="game.craft('campfire')">🔥 Костер<br><small>(5 дерева)</small></div>
+        <div class="craft-item" onclick="game.craft('wall')">🧱 Стена<br><small>(3 дерева, 2 камня)</small></div>
+    </div>
+
+    <div id="inventory">
+        <div class="inv-slot">
+            <span id="inv-wood">0</span>
+            <div style="font-size: 24px;">🪵</div>
+            <div class="inv-label">Дерево</div>
+        </div>
+        <div class="inv-slot">
+            <span id="inv-stone">0</span>
+            <div style="font-size: 24px;">🪨</div>
+            <div class="inv-label">Камень</div>
+        </div>
+    </div>
+
+    <div id="hint">WASD: Ходить | ЛКМ: Сбор | E: Крафт</div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // Код JS остается прежним, так как логика не менялась
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const WORLD_SIZE = 3000;
+        
+        const game = {
+            width: window.innerWidth,
+            height: window.innerHeight,
+            camera: { x: 0, y: 0 },
+            mouse: { x: 0, y: 0, worldX: 0, worldY: 0 },
+            keys: {},
+            entities: [],
+            player: null,
+            dayTime: 0,
+            dayDuration: 6000,
+            isCraftingOpen: false
+        };
+
+        class Player {
+            constructor(x, y) {
+                this.x = x; this.y = y;
+                this.radius = 20; this.speed = 4;
+                this.health = 100; this.hunger = 0; this.energy = 100;
+                this.inventory = { wood: 0, stone: 0 };
+                this.angle = 0; this.lastHit = 0;
+            }
+
+            update() {
+                let dx = 0, dy = 0;
+                if (game.keys['KeyW']) dy -= 1; if (game.keys['KeyS']) dy += 1;
+                if (game.keys['KeyA']) dx -= 1; if (game.keys['KeyD']) dx += 1;
+
+                if (dx !== 0 || dy !== 0) {
+                    const mag = Math.sqrt(dx*dx + dy*dy);
+                    this.x += (dx/mag) * this.speed;
+                    this.y += (dy/mag) * this.speed;
+                    this.energy = Math.max(0, this.energy - 0.02);
+                } else {
+                    this.energy = Math.min(100, this.energy + 0.05);
+                }
+
+                this.hunger += 0.008; 
+                if (this.hunger > 100) { this.hunger = 100; this.health -= 0.05; }
+                this.angle = Math.atan2(game.mouse.worldY - this.y, game.mouse.worldX - this.x);
+                this.x = Math.max(this.radius, Math.min(WORLD_SIZE - this.radius, this.x));
+                this.y = Math.max(this.radius, Math.min(WORLD_SIZE - this.radius, this.y));
+
+                if (this.health <= 0) { alert("Игра окончена!"); location.reload(); }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                ctx.fillStyle = '#3498db';
+                ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = '#2980b9';
+                ctx.fillRect(10, -15, 15, 10); ctx.fillRect(10, 5, 15, 10);
+                ctx.restore();
+            }
+        }
+
+        class Entity {
+            constructor(x, y, type) {
+                this.x = x; this.y = y; this.type = type;
+                this.hp = 3; this.removed = false;
+                if(type === 'tree') { this.radius = 30; this.color = '#2d5a27'; }
+                if(type === 'rock') { this.radius = 20; this.color = '#7f8c8d'; }
+                if(type === 'enemy') { this.radius = 22; this.color = '#e74c3c'; this.hp = 5; }
+                if(type === 'campfire') { this.radius = 15; this.hp = 100; }
+                if(type === 'wall') { this.radius = 25; this.hp = 10; }
+            }
+
+            update() {
+                if (this.type === 'enemy') {
+                    const dist = Math.hypot(game.player.x - this.x, game.player.y - this.y);
+                    if (dist < 300) {
+                        const angle = Math.atan2(game.player.y - this.y, game.player.x - this.x);
+                        this.x += Math.cos(angle) * 1.5;
+                        this.y += Math.sin(angle) * 1.5;
+                        if (dist < 40 && Date.now() - game.player.lastHit > 1000) {
+                            game.player.health -= 10;
+                            game.player.lastHit = Date.now();
+                        }
+                    }
+                }
+            }
+
+            draw() {
+                ctx.save();
+                if (this.type === 'tree') {
+                    ctx.fillStyle = '#3e2723'; ctx.fillRect(this.x - 5, this.y - 5, 10, 10);
+                    ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y - 5, this.radius, 0, Math.PI * 2); ctx.fill();
+                } else if (this.type === 'rock') {
+                    ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill();
+                } else if (this.type === 'enemy') {
+                    ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill();
+                } else if (this.type === 'campfire') {
+                    ctx.fillStyle = '#5d4037'; ctx.fillRect(this.x - 15, this.y - 15, 30, 30);
+                    ctx.fillStyle = Math.random() > 0.5 ? '#f39c12' : '#e67e22';
+                    ctx.beginPath(); ctx.arc(this.x, this.y, 10 + Math.random()*5, 0, Math.PI * 2); ctx.fill();
+                } else if (this.type === 'wall') {
+                    ctx.fillStyle = '#5d4037'; ctx.fillRect(this.x - 20, this.y - 20, 40, 40);
+                    ctx.strokeStyle = '#3e2723'; ctx.lineWidth = 4; ctx.strokeRect(this.x - 20, this.y - 20, 40, 40);
+                }
+                ctx.restore();
+            }
+        }
+
+        function init() {
+            game.player = new Player(WORLD_SIZE/2, WORLD_SIZE/2);
+            for(let i=0; i<150; i++) game.entities.push(new Entity(Math.random()*WORLD_SIZE, Math.random()*WORLD_SIZE, 'tree'));
+            for(let i=0; i<60; i++) game.entities.push(new Entity(Math.random()*WORLD_SIZE, Math.random()*WORLD_SIZE, 'rock'));
+            for(let i=0; i<25; i++) game.entities.push(new Entity(Math.random()*WORLD_SIZE, Math.random()*WORLD_SIZE, 'enemy'));
+
+            window.addEventListener('keydown', e => game.keys[e.code] = true);
+            window.addEventListener('keyup', e => {
+                game.keys[e.code] = false;
+                if (e.code === 'KeyE') toggleCrafting();
+            });
+            window.addEventListener('mousemove', e => { game.mouse.x = e.clientX; game.mouse.y = e.clientY; });
+            window.addEventListener('mousedown', handleInteraction);
+            window.addEventListener('resize', resize);
+            resize(); loop();
+        }
+
+        function toggleCrafting() {
+            game.isCraftingOpen = !game.isCraftingOpen;
+            document.getElementById('crafting-menu').style.display = game.isCraftingOpen ? 'block' : 'none';
+        }
+
+        game.craft = function(type) {
+            if (type === 'campfire' && game.player.inventory.wood >= 5) {
+                game.player.inventory.wood -= 5;
+                game.entities.push(new Entity(game.player.x + 40, game.player.y + 40, 'campfire'));
+            } else if (type === 'wall' && game.player.inventory.wood >= 3 && game.player.inventory.stone >= 2) {
+                game.player.inventory.wood -= 3;
+                game.player.inventory.stone -= 2;
+                game.entities.push(new Entity(game.player.x + 40, game.player.y + 40, 'wall'));
+            }
+            updateUI();
+        }
+
+        function handleInteraction() {
+            game.entities.forEach(en => {
+                const dist = Math.hypot(en.x - game.mouse.worldX, en.y - game.mouse.worldY);
+                const distToPlayer = Math.hypot(en.x - game.player.x, en.y - game.player.y);
+                if (dist < en.radius + 15 && distToPlayer < 100) {
+                    en.hp--;
+                    if (en.hp <= 0) {
+                        en.removed = true;
+                        if (en.type === 'tree') game.player.inventory.wood += 2;
+                        if (en.type === 'rock') game.player.inventory.stone += 2;
+                        updateUI();
+                    }
+                }
+            });
+        }
+
+        function updateUI() {
+            document.getElementById('health-fill').style.width = game.player.health + '%';
+            document.getElementById('hunger-fill').style.width = game.player.hunger + '%';
+            document.getElementById('energy-fill').style.width = game.player.energy + '%';
+            document.getElementById('inv-wood').innerText = game.player.inventory.wood;
+            document.getElementById('inv-stone').innerText = game.player.inventory.stone;
+        }
+
+        function resize() {
+            game.width = window.innerWidth; game.height = window.innerHeight;
+            canvas.width = game.width; canvas.height = game.height;
+        }
+
+        function loop() {
+            update(); draw();
+            requestAnimationFrame(loop);
+        }
+
+        function update() {
+            game.player.update();
+            game.camera.x = game.player.x - game.width / 2;
+            game.camera.y = game.player.y - game.height / 2;
+            game.mouse.worldX = game.mouse.x + game.camera.x;
+            game.mouse.worldY = game.mouse.y + game.camera.y;
+            game.entities.forEach(en => en.update());
+            game.entities = game.entities.filter(en => !en.removed);
+            game.dayTime = (game.dayTime + 1) % game.dayDuration;
+            updateUI();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, game.width, game.height);
+            ctx.save();
+            ctx.translate(-game.camera.x, -game.camera.y);
+            ctx.fillStyle = '#1e2b0e'; ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+            ctx.strokeStyle = '#2a3b16';
+            for(let i=0; i<WORLD_SIZE; i+=100) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, WORLD_SIZE); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(WORLD_SIZE, i); ctx.stroke();
+            }
+            game.entities.forEach(en => {
+                if (en.x > game.camera.x - 100 && en.x < game.camera.x + game.width + 100 &&
+                    en.y > game.camera.y - 100 && en.y < game.camera.y + game.height + 100) {
+                    en.draw();
+                }
+            });
+            game.player.draw();
+            ctx.restore();
+            drawLighting();
+        }
+
+        function drawLighting() {
+            let nightAlpha = 0;
+            const progress = game.dayTime / game.dayDuration;
+            if (progress > 0.4 && progress < 0.9) {
+                nightAlpha = Math.min(0.75, (progress - 0.4) * 4);
+                if (progress > 0.7) nightAlpha = Math.min(0.75, (0.9 - progress) * 4);
+            }
+            if (nightAlpha > 0) {
+                const offscreenCanvas = document.createElement('canvas');
+                offscreenCanvas.width = game.width; offscreenCanvas.height = game.height;
+                const octx = offscreenCanvas.getContext('2d');
+                octx.fillStyle = `rgba(0, 0, 10, ${nightAlpha})`;
+                octx.fillRect(0, 0, game.width, game.height);
+                octx.globalCompositeOperation = 'destination-out';
+                drawLightCircle(octx, game.player.x - game.camera.x, game.player.y - game.camera.y, 160);
+                game.entities.forEach(en => {
+                    if (en.type === 'campfire') drawLightCircle(octx, en.x - game.camera.x, en.y - game.camera.y, 250);
+                });
+                ctx.drawImage(offscreenCanvas, 0, 0);
+            }
+        }
+
+        function drawLightCircle(octx, x, y, radius) {
+            const grad = octx.createRadialGradient(x, y, 0, x, y, radius);
+            grad.addColorStop(0, 'rgba(0,0,0,1)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            octx.fillStyle = grad; octx.beginPath(); octx.arc(x, y, radius, 0, Math.PI * 2); octx.fill();
+        }
+
+        init();
+    </script>
+</body>
+</html>
